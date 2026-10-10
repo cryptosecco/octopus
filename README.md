@@ -1,5 +1,37 @@
 # Octopus
 
+```text
+                        _.--~~~~~~~--._          o
+                    .-~'               '~-.   O
+                 .-'      .         .      '-.     .
+               .'    o                   o    '.
+              /            .       .            \
+             /    .                         .    \
+             |        o                 o        |
+             |      .-~~-.           .-~~-.      |
+             |     / .--. \         / .--. \     |
+             |     | |()| |         | |()| |     |
+             |     \ '--' /         \ '--' /     |
+             |      '-..-'           '-..-'      |
+              \             `.___.'             /
+               '.                             .'
+               / / / / | | | |   | | | | \ \ \ \
+              /o/ | |  /o/ | |   | | \o\  | | \o\
+             / /  /o/ | |  |o|   |o|  | | \o\  \ \
+            / /  / /  | |  \ \   / /  | |  \ \  \ \
+           /o/  | |   /o/   | | | |   \o\   | |  \o\
+          / /   /o/  | |    |o| |o|    | |  \o\   \ \
+         / /   | |   | |    / / \ \    | |   | |   \ \
+        /o/    / /   \o\   | |   | |   /o/   \ \    \o\
+        |     |o|     | |  |o|   |o|  | |     |o|     |
+        |      |      | |  \ \   / /  | |      |      |
+     @-'       \       \    | | | |    /       /       '-@
+                \       |    |   |    |       /
+              @'        |    /   \    |        '@
+                        '@  /     \  @'
+                          @'       '@
+```
+
 Comando `/octopus` per Claude Code: orchestra task lunghi e complessi su tre modelli, instradando ogni sub-task al livello più economico che può riuscire e salendo solo su evidenza di fallimento.
 
 ![Architettura di Octopus](docs/architecture.svg)
@@ -45,6 +77,32 @@ Escalation: Haiku, poi Sonnet, poi Opus, massimo 2 tentativi per livello. Il ril
 | Best-of-N | sub-task difficili con test oggettivi: 2-3 executor Haiku in worktree, vince chi supera il gate | medio, senza bias da giudice LLM |
 | Debate | solo su finding di revisione in conflitto ad alto rischio | alto |
 
+## Contesto e cache
+
+In una sessione lunga il consumo dipende soprattutto da quanto contesto viene rispedito o riscritto a ogni turno. Due default di Claude Code pesano sulle orchestrazioni (verificati sulla versione 2.1.295):
+
+| Meccanismo | Default | Perché pesa |
+|---|---|---|
+| Auto-compact | scatta vicino al riempimento della finestra, circa 967k token sui modelli da 1M | fino ad allora ogni turno rispedisce l'intera storia; anche se letta in gran parte dalla cache, conta sui limiti di utilizzo |
+| Cache dei subagent | TTL di 5 minuti (la conversazione principale, con l'abbonamento, ha 1 ora) | un agente fermo più di 5 minuti, in attesa di revisione, build o test, riscrive tutto il suo contesto al turno successivo |
+
+Come li gestisce Octopus:
+
+- `executor`, `octopus-reviewer` e `octopus-devops` dichiarano `experimental.cacheTtl: 1h` nel frontmatter: sono gli agenti che restano fermi durante revisioni, build e test. `Explore` resta a 5 minuti perché è monouso. La scrittura in cache a 1 ora costa più di quella a 5 minuti, quindi conviene solo dove le pause sono frequenti.
+- Gli agenti sono monouso, un executor per sub-task. Un agente fermo oltre il suo TTL non viene ripreso con SendMessage: lo sostituisce un agente nuovo con brief e finding.
+- La testa tiene lo stato su file e suggerisce `/compact` prima delle pause lunghe, finché la cache è calda: il riassunto costa una lettura, la ripresa a cache scaduta riscrive tutta la storia.
+- Per flussi indipendenti che durano ore propone sessioni separate, ciascuna con il proprio file di stato.
+
+Impostazione consigliata, una volta sola:
+
+```
+/autocompact 400000
+```
+
+Abbassa la soglia di auto-compact (da 100000 a 1000000 token, `auto` per il default) e la salva nelle impostazioni. Tra 300000 e 500000 a seconda di quanto contesto serve tenere.
+
+Precedenza del TTL dei subagent, dalla più forte: `FORCE_PROMPT_CACHING_5M`, la variabile `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL`, l'impostazione `subagentPromptCacheTtl`, `experimental.cacheTtl` dell'agente, la variabile `ENABLE_PROMPT_CACHING_1H`. Un `subagentPromptCacheTtl` globale sovrascrive quindi il TTL dei singoli agenti: usalo solo se vuoi 1 ora anche per gli agenti monouso. Con l'abbonamento in overage il TTL a 1 ora viene ignorato.
+
 ## Installazione
 
 ```sh
@@ -53,7 +111,7 @@ Escalation: Haiku, poi Sonnet, poi Opus, massimo 2 tentativi per livello. Il ril
 
 Copia il comando e gli agenti in `~/.claude`. Rifiuta di sovrascrivere file esistenti; con `--force` li sostituisce. La destinazione si cambia con `CLAUDE_HOME`.
 
-Claude Code carica le definizioni degli agenti all'avvio: dopo l'installazione apri una nuova sessione.
+Claude Code carica le definizioni degli agenti all'avvio: dopo l'installazione apri una nuova sessione ed esegui una volta `/autocompact 400000`.
 
 ## Uso
 

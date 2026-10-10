@@ -47,6 +47,18 @@ Non esiste una modalità migliore in assoluto: costano molto diversamente. Usale
 - **Debate / giudici multipli.** Solo su finding di revisione in conflitto su un punto ad alto rischio; altrimenti verifica tu direttamente sul codice.
 - **Stato su file per task lunghi.** Se il task supera ~6 sub-task o più ondate, mantieni un file di stato (`.octopus/STATE.md` nel progetto, o in una cartella scratch se non vuoi sporcare il repo; aggiungi alla baseline) con: obiettivo, piano, per ogni sub-task tier/stato/tentativi/file, decisioni prese e perché. Serve a sopravvivere alla compattazione del contesto e a riprendere dopo interruzioni. Si aggiorna a ogni ondata, in poche righe.
 
+## Contesto e cache
+
+In una sessione lunga il consumo dipende soprattutto da quanto contesto viene rispedito o riscritto a ogni turno. Pesano due default: sui modelli da 1M l'auto-compact scatta solo vicino al riempimento della finestra, quindi ogni turno rispedisce l'intera storia; i subagent hanno una cache di 5 minuti (la conversazione principale, con l'abbonamento, di 1 ora), quindi un agente fermo più a lungo riscrive tutto il suo contesto al turno successivo.
+
+- **Il tuo contesto è il più caro.** All'avvio di un task lungo controlla se `autoCompactWindow` è impostato (`~/.claude/settings.json` o `.claude/settings*.json` del progetto). Se non lo è e lavori con la finestra da 1M, nel piano consiglia una volta all'utente `/autocompact 400000`.
+- **Compatta prima delle pause, non dopo.** A fine ondata e prima di fermarti in attesa dell'utente aggiorna il file di stato. Se la pausa sarà lunga, suggerisci `/compact` subito: con la cache calda il riassunto costa una lettura, a cache scaduta la ripresa riscrive tutta la storia.
+- **Subagent brevi e monouso.** Un executor per sub-task, mai riusato per un sub-task diverso. Un flusso lungo si spezza in sub-task brevi che si passano lo stato tramite brief e file di stato, non in un agente che vive per ore.
+- **TTL degli agenti.** `executor`, `octopus-reviewer` e `octopus-devops` dichiarano una cache di 1 ora nel frontmatter (`experimental.cacheTtl`), perché restano fermi durante revisioni, build e test. `Explore` resta a 5 minuti: è monouso.
+- **SendMessage solo a cache calda.** Riprendere un agente con SendMessage conviene finché la sua cache è valida (meno di 1 ora per gli agenti octopus, 5 minuti se l'abbonamento è in overage o se `subagentPromptCacheTtl` vale `"5m"`). Oltre, lancia un agente nuovo con il brief, i finding confermati e l'elenco dei file da rileggere.
+- **Sessioni separate per i macro-flussi.** Se il task contiene flussi indipendenti che durano ore (servizi o moduli distinti), proponi all'utente una sessione octopus per flusso, ciascuna con il proprio file di stato, invece di tenerli tutti nel tuo contesto.
+- **Niente polling.** Attendi le notifiche di completamento degli agenti; non interrogarli a intervalli.
+
 ## Fase 0 — Inquadramento
 
 Se il task è ambiguo su punti che cambiano il piano (scope, tecnologia, comportamento atteso), chiarisci con AskUserQuestion PRIMA di pianificare. Massimo 2-3 domande, solo su ciò che non puoi dedurre dal codice.
@@ -80,13 +92,13 @@ Mostra sempre all'utente il piano in forma compatta (sub-task → file → tier 
 
 ## Fase 3 — Esecuzione
 
-Delega ogni brief a un agente `executor` (subagent_type: `executor`, default Haiku; `model: "sonnet"` per i sub-task instradati a Sonnet), incollando il brief integrale: l'executor non vede questa conversazione.
+Delega ogni brief a un agente `executor` (subagent_type: `executor`, default Haiku; `model: "sonnet"` per i sub-task instradati a Sonnet), incollando il brief integrale: l'executor non vede questa conversazione. Un executor per sub-task: non riusarlo per un sub-task diverso.
 
 - Sub-task indipendenti che toccano **file diversi**: lanciali in parallelo nello stesso messaggio.
 - Sub-task paralleli che potrebbero toccare **gli stessi file**: o serializzali, o lanciali con `isolation: "worktree"`. In quel caso, al loro termine fai riportare le modifiche nell'albero principale (merge o apply del diff) a `octopus-devops`, che segnala i conflitti: la revisione di Fase 4 avviene sullo stato post-merge nell'albero principale, mai sul worktree pre-merge.
 - Sub-task dipendenti: in sequenza, passando nel brief successivo ciò che è emerso dal precedente (in forma di sintesi, non di dump).
 
-**Controllo d'integrità dopo ogni executor.** Prima di procedere, verifica in sola lettura che il lavoro atteso sia davvero nell'albero e che quello degli altri non sia sparito (firme attese nel diff, `git diff --stat`). Per ondate numerose delegalo a `octopus-devops` passandogli baseline e simboli attesi. Se qualcosa è sparito, recupera con `SendMessage` all'executor interessato (ha il contesto per riapplicare).
+**Controllo d'integrità dopo ogni executor.** Prima di procedere, verifica in sola lettura che il lavoro atteso sia davvero nell'albero e che quello degli altri non sia sparito (firme attese nel diff, `git diff --stat`). Per ondate numerose delegalo a `octopus-devops` passandogli baseline e simboli attesi. Se qualcosa è sparito, recupera con `SendMessage` all'executor interessato (ha il contesto per riapplicare); se la sua cache è scaduta, rilancia lo stesso brief su un executor nuovo.
 
 ## Fase 4 — Revisione a cascata
 
@@ -102,7 +114,7 @@ Al reviewer passa: il brief originale, la baseline git registrata in Fase 1, l'e
 
 Adiudica tu il verdetto:
 - **approve** → sub-task chiuso
-- **revise** → rimanda i finding CONFERMATI allo **stesso** executor via SendMessage (conserva il suo contesto), poi ri-revisiona solo i punti contestati; se l'executor è Haiku e il finding mostra un errore di comprensione (non una svista), vai direttamente all'escalation a Sonnet
+- **revise** → rimanda i finding CONFERMATI allo **stesso** executor via SendMessage (conserva il suo contesto) se la sua cache è ancora calda, altrimenti a un executor nuovo con brief e finding (vedi Contesto e cache); poi ri-revisiona solo i punti contestati; se l'executor è Haiku e il finding mostra un errore di comprensione (non una svista), vai direttamente all'escalation a Sonnet
 - finding dubbi o in conflitto col piano → verificali tu direttamente sul codice prima di rimandarli
 
 Massimo 2 cicli revise per sub-task; se non converge, applica la scala di escalation o riporta il blocco all'utente.

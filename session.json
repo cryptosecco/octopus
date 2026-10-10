@@ -1,0 +1,7 @@
+{
+  "autoCompactWindow": 400000,
+  "promptCacheTtl": "1h",
+  "env": {
+    "OCTOPUS_SESSION": "1"
+  }
+}

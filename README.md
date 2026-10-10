@@ -93,13 +93,17 @@ Come li gestisce Octopus:
 - La testa tiene lo stato su file e suggerisce `/compact` prima delle pause lunghe, finché la cache è calda: il riassunto costa una lettura, la ripresa a cache scaduta riscrive tutta la storia.
 - Per flussi indipendenti che durano ore propone sessioni separate, ciascuna con il proprio file di stato.
 
-Impostazione consigliata, una volta sola:
+### Impostazioni di sessione
 
-```
-/autocompact 400000
-```
+`session.json` vale solo per la sessione in cui gira `/octopus` e non tocca le impostazioni globali:
 
-Abbassa la soglia di auto-compact (da 100000 a 1000000 token, `auto` per il default) e la salva nelle impostazioni. Tra 300000 e 500000 a seconda di quanto contesto serve tenere.
+| Chiave | Valore | Effetto |
+|---|---|---|
+| `autoCompactWindow` | `400000` | l'auto-compact scatta intorno ai 367k token invece che a 967k |
+| `promptCacheTtl` | `"1h"` | cache di 1 ora per la testa anche con API key; con l'abbonamento è già il default |
+| `env.OCTOPUS_SESSION` | `"1"` | permette alla testa di capire se la sessione è stata avviata con queste impostazioni |
+
+Si passa all'avvio con `--settings`, che ha la precedenza sulle impostazioni utente e progetto solo per quella sessione. Non usare `/autocompact`: salva il valore nelle impostazioni globali.
 
 Precedenza del TTL dei subagent, dalla più forte: `FORCE_PROMPT_CACHING_5M`, la variabile `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL`, l'impostazione `subagentPromptCacheTtl`, `experimental.cacheTtl` dell'agente, la variabile `ENABLE_PROMPT_CACHING_1H`. Un `subagentPromptCacheTtl` globale sovrascrive quindi il TTL dei singoli agenti: usalo solo se vuoi 1 ora anche per gli agenti monouso. Con l'abbonamento in overage il TTL a 1 ora viene ignorato.
 
@@ -109,15 +113,23 @@ Precedenza del TTL dei subagent, dalla più forte: `FORCE_PROMPT_CACHING_5M`, la
 ./install.sh
 ```
 
-Copia il comando e gli agenti in `~/.claude`. Rifiuta di sovrascrivere file esistenti; con `--force` li sostituisce. La destinazione si cambia con `CLAUDE_HOME`.
+Copia il comando e gli agenti in `~/.claude` e le impostazioni di sessione in `~/.claude/octopus/session.json`. Rifiuta di sovrascrivere file esistenti; con `--force` li sostituisce. La destinazione si cambia con `CLAUDE_HOME`.
 
-Claude Code carica le definizioni degli agenti all'avvio: dopo l'installazione apri una nuova sessione ed esegui una volta `/autocompact 400000`.
+Claude Code carica le definizioni degli agenti all'avvio: dopo l'installazione apri una nuova sessione.
 
 ## Uso
 
+```sh
+claude --settings ~/.claude/octopus/session.json "/octopus <task da realizzare>"
 ```
-/octopus <task da realizzare>
+
+Per non riscriverlo ogni volta, un alias nella shell:
+
+```sh
+alias octopus='claude --settings ~/.claude/octopus/session.json'
 ```
+
+`/octopus` funziona anche in una sessione normale, ma con l'auto-compact di default; per i task lunghi la testa suggerisce di riavviare con le impostazioni di sessione.
 
 Con un repo git sono disponibili worktree e best-of-N. Senza git i sub-task con file in comune vengono serializzati e la revisione avviene senza diff.
 
@@ -128,6 +140,7 @@ commands/octopus.md          comando e logica di orchestrazione
 agents/executor.md           esecutore su Haiku 5.5
 agents/octopus-reviewer.md   revisore a contesto fresco su Sonnet 5.5
 agents/octopus-devops.md     verifica e integrazione su Sonnet 5.5
+session.json                 impostazioni della sessione /octopus
 docs/architecture.svg        diagramma dell'architettura
 install.sh                   installazione in ~/.claude
 ```

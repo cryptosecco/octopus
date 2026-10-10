@@ -22,6 +22,7 @@ install_file() {
 
 status=0
 install_file "$root/commands/octopus.md" "$target/commands/octopus.md" || status=1
+install_file "$root/session.json" "$target/octopus/session.json" || status=1
 for agent in "$root"/agents/*.md; do
   install_file "$agent" "$target/agents/$(basename "$agent")" || status=1
 done
